@@ -19,10 +19,8 @@ const CLIENT_ID = process.env.CLIENT_ID;
 
 const DATA_FILE = 'guesses.json';
 
-// Poll status speichern
 let pollActive = false;
 
-// guesses laden
 let guesses = {};
 function saveGuesses() {
     fs.writeFileSync(DATA_FILE, JSON.stringify(guesses, null, 2));
@@ -61,7 +59,6 @@ const commands = [
         .setDescription('Zeige alle aktuellen Schätzungen an')
 ].map(cmd => cmd.toJSON());
 
-// Commands global registrieren (bei Bot-Start)
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
     try {
@@ -109,7 +106,6 @@ client.on('interactionCreate', async interaction => {
 
         pollActive = false;
 
-        // Uhrzeit als Date-Objekt für den Vergleich erstellen (heute)
         const [realHour, realMinute] = realTime.split(':').map(Number);
         const referenceDate = new Date();
         referenceDate.setHours(realHour, realMinute, 0, 0);
@@ -127,7 +123,6 @@ client.on('interactionCreate', async interaction => {
             }
         });
 
-        // guesses.json löschen
         if (fs.existsSync(DATA_FILE)) {
             fs.unlinkSync(DATA_FILE);
         }
@@ -157,20 +152,19 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ content: `Deine Schätzung **${zeit}** wurde gespeichert.`, ephemeral: true });
     }
 
-    // /guesses (mit Paging und Discord-Mentions)
+    // /guesses (with Paging and Discord-Mentions)
     if (interaction.commandName === 'guesses') {
         if (Object.keys(guesses).length === 0) {
             return interaction.reply('Noch keine Schätzungen vorhanden.');
         }
 
-        // Sortieren nach Uhrzeit
         const sortedGuesses = Object.entries(guesses).sort((a, b) => {
             const [ah, am] = a[1].time.split(':').map(Number);
             const [bh, bm] = b[1].time.split(':').map(Number);
             return ah === bh ? am - bm : ah - bh;
         });
 
-        const pageSize = 20; // Schätzungen pro Seite
+        const pageSize = 20;
         const totalPages = Math.ceil(sortedGuesses.length / pageSize);
 
         function makeEmbed(page) {
@@ -209,7 +203,7 @@ client.on('interactionCreate', async interaction => {
 
         const collector = message.createMessageComponentCollector({
             componentType: ComponentType.Button,
-            time: 2 * 60 * 1000, // 2 Minuten
+            time: 2 * 60 * 1000,
             filter: i => i.user.id === interaction.user.id,
         });
 
@@ -221,7 +215,6 @@ client.on('interactionCreate', async interaction => {
                 currentPage++;
             }
 
-            // Buttons aktualisieren
             row.components[0].setDisabled(currentPage === 0);
             row.components[1].setDisabled(currentPage === totalPages - 1);
 
@@ -229,7 +222,6 @@ client.on('interactionCreate', async interaction => {
         });
 
         collector.on('end', async () => {
-            // Buttons deaktivieren, wenn Zeit abgelaufen
             row.components[0].setDisabled(true);
             row.components[1].setDisabled(true);
             await message.edit({ components: [row] });
