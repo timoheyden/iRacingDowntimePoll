@@ -78,11 +78,21 @@ client.once('ready', () => {
     console.log(`Bot angemeldet als ${client.user.tag}`);
 });
 
+function logCommand(interaction, extra = {}) {
+    const timestamp = new Date().toISOString();
+    const cmd = interaction.commandName;
+    const user = `${interaction.user.tag} (${interaction.user.id})`;
+    const guild = interaction.guild ? `${interaction.guild.name} (${interaction.guild.id})` : 'DM/Unknown';
+    const opts = Object.entries(extra).map(([k, v]) => `${k}: ${v}`).join(', ');
+    console.log(`[${timestamp}] [Command] ${cmd} von ${user} in ${guild}${opts ? ' | ' + opts : ''}`);
+}
+
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
 
     // /pollstart
     if (interaction.commandName === 'pollstart') {
+        logCommand(interaction);
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
             return interaction.reply({ content: 'Nur Mods können die Umfrage starten!', ephemeral: true });
         }
@@ -94,18 +104,18 @@ client.on('interactionCreate', async interaction => {
 
     // /pollclose
     if (interaction.commandName === 'pollclose') {
+        const realTime = interaction.options.getString('zeit');
+        logCommand(interaction, { zeit: realTime });
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
             return interaction.reply({ content: 'Nur Mods können die Umfrage schließen!', ephemeral: true });
         }
         if (!pollActive) return interaction.reply({ content: 'Es läuft keine aktive Umfrage.', ephemeral: true });
 
-        const realTime = interaction.options.getString('zeit');
         if (!/^[0-2][0-9]:[0-5][0-9]$/.test(realTime)) {
             return interaction.reply({ content: 'Bitte gib die Zeit im Format HH:MM an.', ephemeral: true });
         }
 
         pollActive = false;
-
         const [realHour, realMinute] = realTime.split(':').map(Number);
         const referenceDate = new Date();
         referenceDate.setHours(realHour, realMinute, 0, 0);
@@ -139,8 +149,9 @@ client.on('interactionCreate', async interaction => {
 
     // /guess
     if (interaction.commandName === 'guess') {
-        if (!pollActive) return interaction.reply({ content: 'Es läuft aktuell keine aktive Umfrage.', ephemeral: true });
         const zeit = interaction.options.getString('zeit');
+        logCommand(interaction, { zeit });
+        if (!pollActive) return interaction.reply({ content: 'Es läuft aktuell keine aktive Umfrage.', ephemeral: true });
         if (!/^[0-2][0-9]:[0-5][0-9]$/.test(zeit)) {
             return interaction.reply({ content: 'Bitte gib deine Schätzung im Format HH:MM (24h) an.', ephemeral: true });
         }
@@ -152,8 +163,9 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ content: `Deine Schätzung **${zeit}** wurde gespeichert.`, ephemeral: true });
     }
 
-    // /guesses (with Paging and Discord-Mentions)
+    // /guesses
     if (interaction.commandName === 'guesses') {
+        logCommand(interaction);
         if (Object.keys(guesses).length === 0) {
             return interaction.reply('Noch keine Schätzungen vorhanden.');
         }
@@ -214,10 +226,8 @@ client.on('interactionCreate', async interaction => {
             if (i.customId === 'next' && currentPage < totalPages - 1) {
                 currentPage++;
             }
-
             row.components[0].setDisabled(currentPage === 0);
             row.components[1].setDisabled(currentPage === totalPages - 1);
-
             await i.update({ embeds: [makeEmbed(currentPage)], components: [row] });
         });
 
