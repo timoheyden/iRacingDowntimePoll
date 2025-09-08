@@ -19,9 +19,9 @@ const CLIENT_ID = process.env.CLIENT_ID;
 
 const DATA_FILE = 'guesses.json';
 
-let pollActive = false;
-
 let guesses = {};
+let pollActive = {};
+
 function saveGuesses() {
     fs.writeFileSync(DATA_FILE, JSON.stringify(guesses, null, 2));
 }
@@ -89,6 +89,10 @@ function logCommand(interaction, extra = {}) {
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
+    if (!interaction.guild) {
+        return interaction.reply({ content: 'Dieser Bot funktioniert nur auf Servern (nicht in DMs).', ephemeral: true });
+    }
+    const guildId = interaction.guild.id;
 
     // /pollstart
     if (interaction.commandName === 'pollstart') {
@@ -96,8 +100,8 @@ client.on('interactionCreate', async interaction => {
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
             return interaction.reply({ content: 'Nur Mods können die Umfrage starten!', ephemeral: true });
         }
-        guesses = {};
-        pollActive = true;
+        guesses[guildId] = {};
+        pollActive[guildId] = true;
         saveGuesses();
         return interaction.reply('Die Schätzungs-Umfrage ist gestartet! Gib deine Schätzung mit `/guess` ab.');
     }
@@ -109,20 +113,20 @@ client.on('interactionCreate', async interaction => {
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
             return interaction.reply({ content: 'Nur Mods können die Umfrage schließen!', ephemeral: true });
         }
-        if (!pollActive) return interaction.reply({ content: 'Es läuft keine aktive Umfrage.', ephemeral: true });
+        if (!pollActive[guildId]) return interaction.reply({ content: 'Es läuft keine aktive Umfrage.', ephemeral: true });
 
         if (!/^[0-2][0-9]:[0-5][0-9]$/.test(realTime)) {
             return interaction.reply({ content: 'Bitte gib die Zeit im Format HH:MM an.', ephemeral: true });
         }
 
-        pollActive = false;
+        pollActive[guildId] = false;
         const [realHour, realMinute] = realTime.split(':').map(Number);
         const referenceDate = new Date();
         referenceDate.setHours(realHour, realMinute, 0, 0);
 
         let winner = null;
         let minDiff = Infinity;
-        Object.entries(guesses).forEach(([userId, entry]) => {
+        Object.entries(guesses[guildId] || {}).forEach(([userId, entry]) => {
             const [h, m] = entry.time.split(':').map(Number);
             const guessDate = new Date(referenceDate);
             guessDate.setHours(h, m, 0, 0);
@@ -133,10 +137,8 @@ client.on('interactionCreate', async interaction => {
             }
         });
 
-        if (fs.existsSync(DATA_FILE)) {
-            fs.unlinkSync(DATA_FILE);
-        }
-        guesses = {};
+        guesses[guildId] = {};
+        saveGuesses();
 
         if (winner) {
             return interaction.reply(
@@ -151,11 +153,12 @@ client.on('interactionCreate', async interaction => {
     if (interaction.commandName === 'guess') {
         const zeit = interaction.options.getString('zeit');
         logCommand(interaction, { zeit });
-        if (!pollActive) return interaction.reply({ content: 'Es läuft aktuell keine aktive Umfrage.', ephemeral: true });
+        if (!pollActive[guildId]) return interaction.reply({ content: 'Es läuft aktuell keine aktive Umfrage.', ephemeral: true });
         if (!/^[0-2][0-9]:[0-5][0-9]$/.test(zeit)) {
             return interaction.reply({ content: 'Bitte gib deine Schätzung im Format HH:MM (24h) an.', ephemeral: true });
         }
-        guesses[interaction.user.id] = {
+        if (!guesses[guildId]) guesses[guildId] = {};
+        guesses[guildId][interaction.user.id] = {
             name: interaction.user.username,
             time: zeit
         };
@@ -166,11 +169,11 @@ client.on('interactionCreate', async interaction => {
     // /guesses
     if (interaction.commandName === 'guesses') {
         logCommand(interaction);
-        if (Object.keys(guesses).length === 0) {
+        if (!guesses[guildId] || Object.keys(guesses[guildId]).length === 0) {
             return interaction.reply('Noch keine Schätzungen vorhanden.');
         }
 
-        const sortedGuesses = Object.entries(guesses).sort((a, b) => {
+        const sortedGuesses = Object.entries(guesses[guildId]).sort((a, b) => {
             const [ah, am] = a[1].time.split(':').map(Number);
             const [bh, bm] = b[1].time.split(':').map(Number);
             return ah === bh ? am - bm : ah - bh;
