@@ -44,26 +44,26 @@ ensureTables();
 const commands = [
   new SlashCommandBuilder()
     .setName('pollstart')
-    .setDescription('Start the guessing poll (mods only)'),
+    .setDescription('Starte die Schätzungsumfrage (nur Mods)'),
   new SlashCommandBuilder()
     .setName('pollclose')
-    .setDescription('End the guessing poll and determine the winner (mods only)')
+    .setDescription('Beende die Schätzungsumfrage und bestimme den Gewinner (nur Mods)')
     .addStringOption(option =>
       option.setName('zeit')
-        .setDescription('The actual time when iRacing is back online (e.g. 18:23)')
+        .setDescription('Die tatsächliche Uhrzeit, zu der iRacing wieder online ist (z.B. 18:23)')
         .setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('guess')
-    .setDescription('Submit your guess (format HH:MM)')
+    .setDescription('Gib deine Schätzung ab (Format HH:MM)')
     .addStringOption(option =>
       option.setName('zeit')
-        .setDescription('Your guess in 24h format, e.g. 15:30')
+        .setDescription('Deine Schätzung im 24h-Format, z.B. 15:30')
         .setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('guesses')
-    .setDescription('Show all current guesses')
+    .setDescription('Zeige alle aktuellen Schätzungen an')
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -81,7 +81,7 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
 });
 
@@ -134,25 +134,25 @@ client.on('interactionCreate', async interaction => {
   if (interaction.commandName === 'pollstart') {
     logCommand(interaction);
     if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return interaction.reply({ content: 'Only mods can start the poll!', ephemeral: true });
+      return interaction.reply({ content: 'Nur Mods können eine Umfrage starten!', ephemeral: true });
     }
     await clearGuesses(guildId);
     await setPollActive(guildId, true);
-    return interaction.reply('The guessing poll is now open! Submit your guess with `/guess`.');
+    return interaction.reply('Die Schätzungs-Umfrage ist gestartet! Gib deine Schätzung mit `/guess` ab.');
   }
 
   if (interaction.commandName === 'pollclose') {
     const realTime = interaction.options.getString('zeit');
     logCommand(interaction, { zeit: realTime });
     if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return interaction.reply({ content: 'Only mods can close the poll!', ephemeral: true });
+      return interaction.reply({ content: 'Nur Mods können die Umfrage schließen!', ephemeral: true });
     }
     if (!await isPollActive(guildId)) {
-      return interaction.reply({ content: 'There is no active poll.', ephemeral: true });
+      return interaction.reply({ content: 'Es läuft keine aktive Umfrage.', ephemeral: true });
     }
 
     if (!/^[0-2][0-9]:[0-5][0-9]$/.test(realTime)) {
-      return interaction.reply({ content: 'Please provide the time in the format HH:MM.', ephemeral: true });
+      return interaction.reply({ content: 'Bitte gib die Zeit im Format HH:MM an.', ephemeral: true });
     }
 
     await setPollActive(guildId, false);
@@ -180,10 +180,10 @@ client.on('interactionCreate', async interaction => {
 
     if (winner) {
       return interaction.reply(
-        `Poll closed!\nActual time: **${realTime}**\nWinner: <@${winner.user_id}> with guess **${winner.time}**.`
+          `Umfrage geschlossen!\nRichtige Uhrzeit: **${realTime}**\nGewinner: <@${winner.user_id}> mit Schätzung **${winner.time}**.`
       );
     } else {
-      return interaction.reply('Poll closed! No valid guesses submitted.');
+      return interaction.reply('Umfrage geschlossen! Keine gültigen Schätzungen vorhanden.');
     }
   }
 
@@ -191,16 +191,16 @@ client.on('interactionCreate', async interaction => {
     const zeit = interaction.options.getString('zeit');
     logCommand(interaction, { zeit });
     if (!await isPollActive(guildId)) {
-      return interaction.reply({ content: 'There is currently no active poll.', ephemeral: true });
+      return interaction.reply({ content: 'Es läuft aktuell keine aktive Umfrage.', ephemeral: true });
     }
-    if (!/^[0-2][0-9]:[0-5][0-9]$/.test(zeit)) {
-      return interaction.reply({ content: 'Please enter your guess in the format HH:MM (24h).', ephemeral: true });
+    if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(zeit)) {
+      return interaction.reply({ content: 'Bitte gib deine Schätzung im Format HH:MM (24h) an.', ephemeral: true });
     }
     if (await hasGuess(guildId, interaction.user.id)) {
-      return interaction.reply({ content: 'You have already submitted a guess! Only one guess per person allowed.', ephemeral: true });
+      return interaction.reply({ content: 'Du hast bereits eine Schätzung abgegeben! Nur eine Schätzung pro Person erlaubt.', ephemeral: true });
     }
     await addGuess(guildId, interaction.user.id, interaction.user.username, zeit);
-    return interaction.reply({ content: `Your guess **${zeit}** has been saved.`, ephemeral: true });
+    return interaction.reply({ content: `Deine Schätzung **${zeit}** wurde gespeichert.`, ephemeral: true });
   }
 
   if (interaction.commandName === 'guesses') {
