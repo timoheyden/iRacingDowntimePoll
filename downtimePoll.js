@@ -11,55 +11,61 @@ const {
   ButtonStyle,
   ComponentType
 } = require('discord.js');
-const fs = require('fs');
+const { Pool } = require('pg');
 require('dotenv').config();
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const PG_CONNECTION_STRING = process.env.PG_CONNECTION_STRING;
 
-const DATA_FILE = 'guesses.json';
+const pool = new Pool({ connectionString: PG_CONNECTION_STRING });
 
-let guesses = {};
-let pollActive = {};
-
-function saveGuesses() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(guesses, null, 2));
+async function ensureTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS guesses (
+      guild_id VARCHAR(32) NOT NULL,
+      user_id VARCHAR(32) NOT NULL,
+      username TEXT NOT NULL,
+      time VARCHAR(5) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (guild_id, user_id)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS polls (
+      guild_id VARCHAR(32) PRIMARY KEY,
+      active BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
 }
-function loadGuesses() {
-  if (fs.existsSync(DATA_FILE)) {
-    guesses = JSON.parse(fs.readFileSync(DATA_FILE));
-  } else {
-    guesses = {};
-  }
-}
-loadGuesses();
+ensureTables();
 
 const commands = [
   new SlashCommandBuilder()
     .setName('pollstart')
-    .setDescription('Starte die Schätzungsumfrage (nur Mods)'),
+    .setDescription('Start the guessing poll (mods only)'),
   new SlashCommandBuilder()
     .setName('pollclose')
-    .setDescription('Beende die Schätzungsumfrage und bestimme den Gewinner (nur Mods)')
+    .setDescription('End the guessing poll and determine the winner (mods only)')
     .addStringOption(option =>
       option.setName('zeit')
-        .setDescription('Die tatsächliche Uhrzeit, zu der iRacing wieder online ist (z.B. 18:23)')
+        .setDescription('The actual time when iRacing is back online (e.g. 18:23)')
         .setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('guess')
-    .setDescription('Gib deine Schätzung ab (Format HH:MM)')
+    .setDescription('Submit your guess (format HH:MM)')
     .addStringOption(option =>
       option.setName('zeit')
-        .setDescription('Deine Schätzung im 24h-Format, z.B. 15:30')
+        .setDescription('Your guess in 24h format, e.g. 15:30')
         .setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('guesses')
-    .setDescription('Zeige alle aktuellen Schätzungen an')
+    .setDescription('Show all current guesses')
 ].map(cmd => cmd.toJSON());
 
-// Commands global registrieren (bei Bot-Start)
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
   try {
@@ -76,7 +82,7 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 
 client.once('ready', () => {
-  console.log(`Bot angemeldet als ${client.user.tag}`);
+  console.log(`Bot logged in as ${client.user.tag}`);
 });
 
 function logCommand(interaction, extra = {}) {
@@ -85,101 +91,128 @@ function logCommand(interaction, extra = {}) {
   const user = `${interaction.user.tag} (${interaction.user.id})`;
   const guild = interaction.guild ? `${interaction.guild.name} (${interaction.guild.id})` : 'DM/Unknown';
   const opts = Object.entries(extra).map(([k, v]) => `${k}: ${v}`).join(', ');
-  console.log(`[${timestamp}] [Command] ${cmd} von ${user} in ${guild}${opts ? ' | ' + opts : ''}`);
+  console.log(`[${timestamp}] [Command] ${cmd} by ${user} in ${guild}${opts ? ' | ' + opts : ''}`);
+}
+
+async function isPollActive(guildId) {
+  const { rows } = await pool.query('SELECT active FROM polls WHERE guild_id = $1', [guildId]);
+  return rows[0]?.active ?? false;
+}
+async function setPollActive(guildId, active) {
+  await pool.query(`
+    INSERT INTO polls (guild_id, active, updated_at) 
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (guild_id) DO UPDATE SET active = EXCLUDED.active, updated_at = NOW()
+  `, [guildId, active]);
+}
+async function clearGuesses(guildId) {
+  await pool.query('DELETE FROM guesses WHERE guild_id = $1', [guildId]);
+}
+async function addGuess(guildId, userId, username, time) {
+  await pool.query(`
+    INSERT INTO guesses (guild_id, user_id, username, time)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (guild_id, user_id) DO NOTHING
+  `, [guildId, userId, username, time]);
+}
+async function hasGuess(guildId, userId) {
+  const { rows } = await pool.query('SELECT 1 FROM guesses WHERE guild_id = $1 AND user_id = $2', [guildId, userId]);
+  return rows.length > 0;
+}
+async function getGuesses(guildId) {
+  const { rows } = await pool.query('SELECT user_id, username, time FROM guesses WHERE guild_id = $1', [guildId]);
+  return rows;
 }
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isCommand()) return;
   if (!interaction.guild) {
-    return interaction.reply({ content: 'Dieser Bot funktioniert nur auf Servern (nicht in DMs).', ephemeral: true });
+    return interaction.reply({ content: 'This bot works only on servers (not in DMs).', ephemeral: true });
   }
   const guildId = interaction.guild.id;
 
-  // /pollstart
   if (interaction.commandName === 'pollstart') {
     logCommand(interaction);
     if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return interaction.reply({ content: 'Nur Mods können die Umfrage starten!', ephemeral: true });
+      return interaction.reply({ content: 'Only mods can start the poll!', ephemeral: true });
     }
-    guesses[guildId] = {};
-    pollActive[guildId] = true;
-    saveGuesses();
-    return interaction.reply('Die Schätzungs-Umfrage ist gestartet! Gib deine Schätzung mit `/guess` ab.');
+    await clearGuesses(guildId);
+    await setPollActive(guildId, true);
+    return interaction.reply('The guessing poll is now open! Submit your guess with `/guess`.');
   }
 
-  // /pollclose
   if (interaction.commandName === 'pollclose') {
     const realTime = interaction.options.getString('zeit');
     logCommand(interaction, { zeit: realTime });
     if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      return interaction.reply({ content: 'Nur Mods können die Umfrage schließen!', ephemeral: true });
+      return interaction.reply({ content: 'Only mods can close the poll!', ephemeral: true });
     }
-    if (!pollActive[guildId]) return interaction.reply({ content: 'Es läuft keine aktive Umfrage.', ephemeral: true });
+    if (!await isPollActive(guildId)) {
+      return interaction.reply({ content: 'There is no active poll.', ephemeral: true });
+    }
 
     if (!/^[0-2][0-9]:[0-5][0-9]$/.test(realTime)) {
-      return interaction.reply({ content: 'Bitte gib die Zeit im Format HH:MM an.', ephemeral: true });
+      return interaction.reply({ content: 'Please provide the time in the format HH:MM.', ephemeral: true });
     }
 
-    pollActive[guildId] = false;
+    await setPollActive(guildId, false);
+
     const [realHour, realMinute] = realTime.split(':').map(Number);
     const referenceDate = new Date();
     referenceDate.setHours(realHour, realMinute, 0, 0);
 
+    const guesses = await getGuesses(guildId);
+
     let winner = null;
     let minDiff = Infinity;
-    Object.entries(guesses[guildId] || {}).forEach(([userId, entry]) => {
+    guesses.forEach(entry => {
       const [h, m] = entry.time.split(':').map(Number);
       const guessDate = new Date(referenceDate);
       guessDate.setHours(h, m, 0, 0);
       let diff = Math.abs(guessDate - referenceDate);
       if (diff < minDiff) {
         minDiff = diff;
-        winner = { userId, time: entry.time };
+        winner = entry;
       }
     });
 
-    guesses[guildId] = {};
-    saveGuesses();
+    await clearGuesses(guildId);
 
     if (winner) {
       return interaction.reply(
-        `Umfrage geschlossen!\nRichtige Uhrzeit: **${realTime}**\nGewinner: <@${winner.userId}> mit Schätzung **${winner.time}**.`
+        `Poll closed!\nActual time: **${realTime}**\nWinner: <@${winner.user_id}> with guess **${winner.time}**.`
       );
     } else {
-      return interaction.reply('Umfrage geschlossen! Keine gültigen Schätzungen vorhanden.');
+      return interaction.reply('Poll closed! No valid guesses submitted.');
     }
   }
 
-  // /guess
   if (interaction.commandName === 'guess') {
     const zeit = interaction.options.getString('zeit');
     logCommand(interaction, { zeit });
-    if (!pollActive[guildId]) return interaction.reply({ content: 'Es läuft aktuell keine aktive Umfrage.', ephemeral: true });
+    if (!await isPollActive(guildId)) {
+      return interaction.reply({ content: 'There is currently no active poll.', ephemeral: true });
+    }
     if (!/^[0-2][0-9]:[0-5][0-9]$/.test(zeit)) {
-      return interaction.reply({ content: 'Bitte gib deine Schätzung im Format HH:MM (24h) an.', ephemeral: true });
+      return interaction.reply({ content: 'Please enter your guess in the format HH:MM (24h).', ephemeral: true });
     }
-    if (!guesses[guildId]) guesses[guildId] = {};
-    if (guesses[guildId][interaction.user.id]) {
-      return interaction.reply({ content: 'Du hast bereits eine Schätzung abgegeben! Nur eine Schätzung pro Person erlaubt.', ephemeral: true });
+    if (await hasGuess(guildId, interaction.user.id)) {
+      return interaction.reply({ content: 'You have already submitted a guess! Only one guess per person allowed.', ephemeral: true });
     }
-    guesses[guildId][interaction.user.id] = {
-      name: interaction.user.username,
-      time: zeit
-    };
-    saveGuesses();
-    return interaction.reply({ content: `Deine Schätzung **${zeit}** wurde gespeichert.`, ephemeral: true });
+    await addGuess(guildId, interaction.user.id, interaction.user.username, zeit);
+    return interaction.reply({ content: `Your guess **${zeit}** has been saved.`, ephemeral: true });
   }
 
-  // /guesses
   if (interaction.commandName === 'guesses') {
     logCommand(interaction);
-    if (!guesses[guildId] || Object.keys(guesses[guildId]).length === 0) {
-      return interaction.reply('Noch keine Schätzungen vorhanden.');
+    const entries = await getGuesses(guildId);
+    if (entries.length === 0) {
+      return interaction.reply('No guesses submitted yet.');
     }
 
-    const sortedGuesses = Object.entries(guesses[guildId]).sort((a, b) => {
-      const [ah, am] = a[1].time.split(':').map(Number);
-      const [bh, bm] = b[1].time.split(':').map(Number);
+    const sortedGuesses = entries.sort((a, b) => {
+      const [ah, am] = a.time.split(':').map(Number);
+      const [bh, bm] = b.time.split(':').map(Number);
       return ah === bh ? am - bm : ah - bh;
     });
 
@@ -190,13 +223,13 @@ client.on('interactionCreate', async interaction => {
       const start = page * pageSize;
       const pageGuesses = sortedGuesses.slice(start, start + pageSize);
       const list = pageGuesses
-        .map(([userId, entry]) => `🕒 \`${entry.time}\` — <@${userId}>`)
+        .map(entry => `🕒 \`${entry.time}\` — <@${entry.user_id}>`)
         .join('\n');
       return new EmbedBuilder()
-        .setTitle('Aktuelle Schätzungen')
+        .setTitle('Current Guesses')
         .setDescription(list)
         .setColor(0x00b0f4)
-        .setFooter({ text: `Seite ${page + 1}/${totalPages} • iRacing Patch Schätzungsumfrage`, iconURL: client.user.displayAvatarURL() });
+        .setFooter({ text: `Page ${page + 1}/${totalPages} • iRacing Patch Guessing Poll`, iconURL: client.user.displayAvatarURL() });
     }
 
     let currentPage = 0;
@@ -204,12 +237,12 @@ client.on('interactionCreate', async interaction => {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('prev')
-        .setLabel('⬅️ Zurück')
+        .setLabel('⬅️ Back')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(true),
       new ButtonBuilder()
         .setCustomId('next')
-        .setLabel('Weiter ➡️')
+        .setLabel('Next ➡️')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(totalPages <= 1)
     );
