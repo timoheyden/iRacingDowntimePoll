@@ -95,7 +95,7 @@ serve(async (req) => {
     const channelId = payload.channel_id;
 
     const { data: poll } = await supabase
-        .from("polls")
+        .from("iracing_downtime_poll.polls")
         .insert({ server_id: guildId, channel_id: channelId, started_at: new Date().toISOString() })
         .select("*")
         .single();
@@ -109,7 +109,7 @@ serve(async (req) => {
   // ===================== POLLCLOSE
   if (name === "pollclose") {
     const { data: openPolls } = await supabase
-        .from("polls")
+        .from("iracing_downtime_poll.polls")
         .select("*")
         .eq("server_id", guildId)
         .is("ended_at", null)
@@ -139,7 +139,7 @@ serve(async (req) => {
     }
 
     const { data: guesses, error: guessesError } = await supabase
-        .from("guesses")
+        .from("iracing_downtime_poll.guesses")
         .select("*")
         .eq("poll_id", pollId);
 
@@ -153,9 +153,10 @@ serve(async (req) => {
     const winner = calculateWinner(guesses || [], actualValue);
 
     const { error } = await supabase
-        .from("polls")
+        .from("iracing_downtime_poll.polls")
         .update({
-          ended_at: new Date().toISOString()
+          ended_at: new Date().toISOString(),
+          winner: winner
         })
         .eq("id", pollId);
 
@@ -180,7 +181,7 @@ serve(async (req) => {
     }
 
     const { data: openPolls } = await supabase
-        .from("polls")
+        .from("iracing_downtime_poll.polls")
         .select("*")
         .eq("server_id", guildId)
         .is("ended_at", null)
@@ -195,7 +196,7 @@ serve(async (req) => {
     const userId = payload.member?.user?.id ?? "unknown";
 
     const { data: existingGuess } = await supabase
-        .from("guesses")
+        .from("iracing_downtime_poll.guesses")
         .select("id")
         .eq("poll_id", pollId)
         .eq("user_id", userId)
@@ -220,7 +221,7 @@ serve(async (req) => {
     }
 
     const { error } = await supabase
-        .from("guesses")
+        .from("iracing_downtime_poll.guesses")
         .insert({
           poll_id: pollId,
           user_id: userId,
@@ -243,7 +244,7 @@ serve(async (req) => {
   // ===================== LIST POLLS
   if (name === "listpolls") {
     const { data: polls } = await supabase
-        .from("polls")
+        .from("iracing_downtime_poll.polls")
         .select("*")
         .eq("server_id", guildId)
         .order("started_at", { ascending: false });
@@ -267,7 +268,7 @@ serve(async (req) => {
   // ===================== LIST GUESSES
   if (name === "guesses") {
     const { data: latestPolls } = await supabase
-        .from("polls")
+        .from("iracing_downtime_poll.polls")
         .select("*")
         .eq("server_id", guildId)
         .order("started_at", { ascending: false })
@@ -280,7 +281,7 @@ serve(async (req) => {
     const pollId = latestPolls[0].id;
 
     const { data: guesses } = await supabase
-        .from("guesses")
+        .from("iracing_downtime_poll.guesses")
         .select("*")
         .eq("poll_id", pollId);
 
